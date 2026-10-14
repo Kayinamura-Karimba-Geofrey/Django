@@ -56,13 +56,17 @@ ROOT_URLCONF = 'school_project.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        # Project-level templates are searched before app templates, so our
+        # auth pages win over the ones django.contrib.admin ships under the
+        # same names (registration/*.html).
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'students.context_processors.user_role',
             ],
         },
     },
@@ -118,9 +122,25 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# Matches the BigAutoField used in students/migrations/0001_initial.py.
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+# Authentication
+# Roles (teacher/student) live in the auth groups created by the students
+# app migration; see students/roles.py.
+
+LOGIN_URL = 'login'
+LOGIN_REDIRECT_URL = 'student_list'
+LOGOUT_REDIRECT_URL = 'login'
+
 
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
+#
+# Django 6+ configures e-mail through MAILERS (defining EMAIL_BACKEND as well
+# is an error in Django 6). The 'default' mailer uses the console backend, so
+# password-reset e-mails are printed to the terminal instead of sent via SMTP.
 
 MAILERS = {
     'default': {

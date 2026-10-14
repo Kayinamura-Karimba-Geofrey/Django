@@ -1,0 +1,16 @@
+{# Signed-in user, their role, and a logout button. Included by all pages. #}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <span class="badge text-capitalize {% if user_role == 'teacher' %}bg-success{% elif user_role == 'student' %}bg-primary{% else %}bg-secondary{% endif %}">
+            {{ user_role|default:"no role" }}
+        </span>
+        <span class="ms-2 text-muted">{{ user.get_full_name|default:user.username }}</span>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{% url 'password_change' %}" class="btn btn-sm btn-outline-primary">Change password</a>
+        <form method="post" action="{% url 'logout' %}">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-outline-secondary">Log out</button>
+        </form>
+    </div>
+</div>

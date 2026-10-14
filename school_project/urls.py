@@ -19,5 +19,9 @@ from django.urls import include, path
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    # Login/logout/password views from django.contrib.auth. Their templates
+    # live in students/templates/registration/ (Django only ships the
+    # password_reset_subject.txt e-mail subject).
+    path('accounts/', include('django.contrib.auth.urls')),
     path('students/', include('students.urls')),
 ]
