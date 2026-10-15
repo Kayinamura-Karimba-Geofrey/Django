@@ -82,14 +82,16 @@ class Command(BaseCommand):
             try:
                 validate_password(password, user=user)
             except ValidationError as exc:
-                raise CommandError('Password rejected: ' + ' '.join(exc.messages))
+                raise CommandError('Password rejected: ' + ' '.join(exc.messages)) from exc
             user.set_password(password)
 
         if options['email']:
             try:
                 validate_email(options['email'])
-            except ValidationError:
-                raise CommandError(f'Invalid e-mail address: {options["email"]!r}')
+            except ValidationError as exc:
+                raise CommandError(
+                    f'Invalid e-mail address: {options["email"]!r}'
+                ) from exc
             user.email = options['email']
 
         # Teachers can use the Django admin; students cannot. Never strip the

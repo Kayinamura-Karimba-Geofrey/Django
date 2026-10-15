@@ -6,39 +6,71 @@ Roles are implemented with Django's built-in auth groups. Two groups exist:
 * ``student`` - read-only access to their own linked record.
 
 Superusers always count as teachers.
+
+Role lookups hit the database, so the resolved role is cached on the user
+object for the lifetime of the request: templates call ``is_teacher`` from the
+context processor, the views call it again and ``role_name`` once more, which
+would otherwise cost three identical queries per request.
 """
 
 TEACHER_GROUP = 'teacher'
 STUDENT_GROUP = 'student'
 
+# Sentinel so "no role" can be cached too (None is a valid result).
+_MISSING = object()
+_ROLE_CACHE_ATTR = '_school_role_cache'
 
-def _in_group(user, group_name):
+
+def role_name(user):
+    """Return 'teacher', 'student' or None for the user's role.
+
+    Superusers always resolve to 'teacher'. The result is cached on the user
+    instance, so group changes made through the same object are only picked up
+    after the cache is cleared (``clear_role_cache``).
+    """
     if not user or not user.is_authenticated:
-        return False
+        return None
+
+    cached = getattr(user, _ROLE_CACHE_ATTR, _MISSING)
+    if cached is not _MISSING:
+        return cached
+
     if user.is_superuser:
-        return True
-    return user.groups.filter(name=group_name).exists()
+        name = TEACHER_GROUP
+    else:
+        # One query for both groups, not one per role check.
+        groups = set(
+            user.groups.filter(name__in=(TEACHER_GROUP, STUDENT_GROUP)).values_list(
+                'name', flat=True
+            )
+        )
+        if TEACHER_GROUP in groups:
+            name = TEACHER_GROUP
+        elif STUDENT_GROUP in groups:
+            name = STUDENT_GROUP
+        else:
+            name = None
+
+    setattr(user, _ROLE_CACHE_ATTR, name)
+    return name
+
+
+def clear_role_cache(user):
+    """Forget the cached role (used after changing a user's groups)."""
+    try:
+        delattr(user, _ROLE_CACHE_ATTR)
+    except AttributeError:
+        pass
 
 
 def is_teacher(user):
     """True for users allowed to create/edit/delete student records."""
-    return _in_group(user, TEACHER_GROUP)
+    return role_name(user) == TEACHER_GROUP
 
 
 def is_student(user):
     """True for users in the student group (and not a teacher)."""
-    return _in_group(user, STUDENT_GROUP)
-
-
-def role_name(user):
-    """Return 'teacher', 'student' or None for display purposes."""
-    if not user or not user.is_authenticated:
-        return None
-    if is_teacher(user):
-        return TEACHER_GROUP
-    if user.groups.filter(name=STUDENT_GROUP).exists():
-        return STUDENT_GROUP
-    return None
+    return role_name(user) == STUDENT_GROUP
 
 
 def ensure_role_permissions(sender, using='default', verbosity=1, apps=None, **kwargs):

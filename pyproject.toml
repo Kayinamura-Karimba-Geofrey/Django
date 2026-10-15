@@ -1,0 +1,16 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["venv", "db.sqlite3"]
+
+[tool.ruff.lint]
+# E/W: pycodestyle, F: pyflakes, I: import sorting, B: bugbear (common mistakes)
+select = ["E", "F", "W", "I", "B"]
+ignore = [
+    # settings.py needs module-level code (env parsing) before the definitions.
+    "E402",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Django's check framework reads this module by name; keep it self-contained.
+"students/migrations/*" = ["E501"]

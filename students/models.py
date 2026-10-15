@@ -21,6 +21,15 @@ class Student(models.Model):
 
     class Meta:
         db_table = 'students'
+        # Stable, human-friendly order for the list view (the paginator and
+        # the admin changelist both rely on it).
+        ordering = ['last_name', 'first_name', 'email']
+        indexes = [
+            # Matches Meta.ordering so the directory stays sorted as it grows.
+            models.Index(fields=['last_name', 'first_name'], name='students_name_idx'),
+            # Admin list_filter / any course-based lookup.
+            models.Index(fields=['course'], name='students_course_idx'),
+        ]
 
     def __str__(self):
         return f"{self.first_name} {self.last_name}"

@@ -2,15 +2,18 @@ import re
 from unittest import mock
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import Group
+from django.contrib.auth.models import AnonymousUser, Group
 from django.core import mail
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db import connection
 from django.test import Client, TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
+from .forms import StudentForm
 from .models import Student
-from .roles import STUDENT_GROUP, TEACHER_GROUP
+from .roles import STUDENT_GROUP, TEACHER_GROUP, is_teacher, role_name
 
 User = get_user_model()
 
@@ -392,3 +395,153 @@ class CreateSchoolUserCommandTests(TestCase):
             call_command('create_school_user', 'nope', '--role', 'student',
                          '--password', 'Ink-Feather-12',
                          '--link-student', 'missing@example.com')
+
+
+class SuccessMessageTests(RoleTestCase):
+    """Writes confirm what happened instead of silently redirecting."""
+
+    def setUp(self):
+        self.client.force_login(self.teacher)
+
+    def test_create_shows_success_message(self):
+        response = self.client.post(
+            self.create_url(),
+            {'first_name': 'Carol', 'last_name': 'C',
+             'email': 'carol@example.com', 'course': 'Math', 'user': ''},
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'was created')
+
+    def test_update_shows_success_message(self):
+        response = self.client.post(
+            self.update_url(self.bob.pk),
+            {'first_name': 'Robert', 'last_name': 'Bee',
+             'email': 'bob@example.com', 'course': 'Physics', 'user': ''},
+            follow=True,
+        )
+        self.assertContains(response, 'was updated')
+
+    def test_delete_shows_success_message(self):
+        response = self.client.post(self.delete_url(self.bob.pk), follow=True)
+        self.assertContains(response, 'was deleted')
+        self.assertFalse(Student.objects.filter(pk=self.bob.pk).exists())
+
+
+class StudentFormTests(RoleTestCase):
+    """The form must validate e-mail addresses and scope its user choices."""
+
+    def test_email_is_stored_lower_case(self):
+        form = StudentForm(data={
+            'first_name': 'Carol', 'last_name': 'C',
+            'email': 'Carol@Example.COM', 'course': 'Math', 'user': '',
+        })
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.save().email, 'carol@example.com')
+
+    def test_duplicate_email_rejected_regardless_of_case(self):
+        form = StudentForm(data={
+            'first_name': 'Impostor', 'last_name': 'I',
+            'email': 'ALICE@example.com', 'course': 'Math', 'user': '',
+        })
+        self.assertFalse(form.is_valid())
+        self.assertIn('email', form.errors)
+        self.assertEqual(Student.objects.count(), 2)  # unchanged
+
+    def test_user_choices_exclude_teachers_and_linked_accounts(self):
+        newbie = User.objects.create_user('newbie', password='pass1234!')
+        newbie.groups.add(self.student_group)
+        self.client.force_login(self.teacher)
+
+        response = self.client.get(self.create_url())
+        self.assertEqual(response.status_code, 200)
+        choices = {user.pk for user in response.context['form'].fields['user'].queryset}
+
+        self.assertIn(newbie.pk, choices)              # unlinked student: linkable
+        self.assertNotIn(self.teacher.pk, choices)     # never a teacher account
+        self.assertNotIn(self.student_user.pk, choices)  # already owns a record
+
+    def test_edit_form_keeps_the_already_linked_account(self):
+        # Alice is linked, so she would be filtered out of a fresh form - but
+        # she has to stay selectable while her own record is edited.
+        form = StudentForm(instance=self.alice)
+        self.assertIn(self.student_user, list(form.fields['user'].queryset))
+
+
+class ListPresentationTests(RoleTestCase):
+    """Stable ordering and pagination for the directory view."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        for index in range(30):
+            Student.objects.create(
+                first_name=f'Stu{index}',
+                last_name=f'Zed{index:02d}',
+                email=f'zed{index:02d}@example.com',
+            )
+        cls.first = Student.objects.create(
+            first_name='Ann', last_name='Alpha', email='ann@example.com',
+        )
+        cls.last = Student.objects.create(
+            first_name='Zoe', last_name='Zulu', email='zoe@example.com',
+        )
+
+    def setUp(self):
+        self.client.force_login(self.teacher)
+
+    def test_teacher_list_is_paginated(self):
+        response = self.client.get(self.list_url())
+        page_obj = response.context['page_obj']
+        self.assertIsNotNone(page_obj)
+        self.assertEqual(page_obj.paginator.count, 34)
+        self.assertEqual(len(response.context['students']), 25)
+        self.assertContains(response, 'page 1 of 2')
+
+    def test_second_page_holds_the_rest(self):
+        response = self.client.get(f'{self.list_url()}?page=2')
+        self.assertEqual(len(response.context['students']), 9)
+        self.assertContains(response, 'page 2 of 2')
+
+    def test_out_of_range_page_falls_back(self):
+        response = self.client.get(f'{self.list_url()}?page=999')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['page_obj'].number, 2)
+
+    def test_rows_are_ordered_by_last_name(self):
+        response = self.client.get(self.list_url())
+        names = [student.last_name for student in response.context['students']]
+        self.assertEqual(names, sorted(names))
+        self.assertEqual(names[0], 'Alpha')
+
+    def test_student_list_is_not_paginated(self):
+        self.client.force_login(self.student_user)
+        response = self.client.get(self.list_url())
+        self.assertIsNone(response.context['page_obj'])
+        self.assertEqual(len(response.context['students']), 1)
+        self.assertNotContains(response, 'page 1 of')
+
+
+class RoleCacheTests(RoleTestCase):
+    """Role helpers must not re-query the groups table on every call."""
+
+    def test_teacher_role_resolved_once_per_user_instance(self):
+        user = User.objects.get(pk=self.teacher.pk)  # fresh instance, cold cache
+        with CaptureQueriesContext(connection) as captured:
+            self.assertTrue(is_teacher(user))
+            self.assertTrue(is_teacher(user))
+            self.assertEqual(role_name(user), 'teacher')
+        self.assertEqual(len(captured.captured_queries), 1)
+
+    def test_student_role_resolved_in_one_query(self):
+        user = User.objects.get(pk=self.student_user.pk)
+        with CaptureQueriesContext(connection) as captured:
+            self.assertFalse(is_teacher(user))
+            self.assertEqual(role_name(user), STUDENT_GROUP)
+        self.assertEqual(len(captured.captured_queries), 1)
+
+    def test_anonymous_and_unknown_users_need_no_query(self):
+        with CaptureQueriesContext(connection) as captured:
+            self.assertIsNone(role_name(AnonymousUser()))
+            self.assertFalse(is_teacher(AnonymousUser()))
+        self.assertEqual(len(captured.captured_queries), 0)

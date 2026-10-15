@@ -1,1 +1,3 @@
-django>=5.0
+# The project uses Django 6+ settings (MAILERS) and was generated with 6.1.
+# Django 5.x does not understand MAILERS, so the range is capped to the 6.x line.
+Django>=6.1,<7

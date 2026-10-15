@@ -1,12 +1,17 @@
 from functools import wraps
 
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
-from django.shortcuts import render, redirect, get_object_or_404
+from django.core.paginator import Paginator
+from django.shortcuts import get_object_or_404, redirect, render
 
 from .forms import StudentForm
 from .models import Student
 from .roles import is_teacher
+
+# Rows per page for the (teacher) directory view.
+STUDENTS_PER_PAGE = 25
 
 
 def teacher_required(view_func):
@@ -35,12 +40,31 @@ def visible_students(user):
 # 1. READ (List students — scoped by role)
 @login_required
 def student_list(request):
-    students = visible_students(request.user)
-    linked = is_teacher(request.user) or students.exists()
+    """Role-scoped directory.
+
+    Teachers get the full, paginated list. Everyone else holds at most one
+    record (``Student.user`` is a OneToOneField), so their rows are fetched in
+    a single query with no pagination.
+    """
+    if is_teacher(request.user):
+        page_obj = Paginator(
+            Student.objects.all(), STUDENTS_PER_PAGE
+        ).get_page(request.GET.get('page'))
+        students = page_obj.object_list
+        linked = True
+    else:
+        students = list(Student.objects.filter(user=request.user))
+        page_obj = None
+        linked = bool(students)
+
     return render(
         request,
         'students/student_list.html',
-        {'students': students, 'student_record_linked': linked},
+        {
+            'students': students,
+            'page_obj': page_obj,
+            'student_record_linked': linked,
+        },
     )
 
 
@@ -50,11 +74,16 @@ def student_create(request):
     if request.method == 'POST':
         form = StudentForm(request.POST)
         if form.is_valid():
-            form.save()
+            student = form.save()
+            messages.success(request, f'Student “{student}” was created.')
             return redirect('student_list')
     else:
         form = StudentForm()
-    return render(request, 'students/student_form.html', {'form': form, 'action': 'Register'})
+    return render(
+        request,
+        'students/student_form.html',
+        {'form': form, 'action': 'Register'},
+    )
 
 
 # 3. UPDATE (Edit existing student record) — teachers only
@@ -64,11 +93,16 @@ def student_update(request, pk):
     if request.method == 'POST':
         form = StudentForm(request.POST, instance=student)
         if form.is_valid():
-            form.save()
+            updated = form.save()
+            messages.success(request, f'Student “{updated}” was updated.')
             return redirect('student_list')
     else:
         form = StudentForm(instance=student)
-    return render(request, 'students/student_form.html', {'form': form, 'action': 'Update'})
+    return render(
+        request,
+        'students/student_form.html',
+        {'form': form, 'action': 'Update'},
+    )
 
 
 # 4. DELETE (Remove student record) — teachers only
@@ -76,6 +110,12 @@ def student_update(request, pk):
 def student_delete(request, pk):
     student = get_object_or_404(Student, pk=pk)
     if request.method == 'POST':
+        name = str(student)
         student.delete()
+        messages.success(request, f'Student “{name}” was deleted.')
         return redirect('student_list')
-    return render(request, 'students/student_confirm_delete.html', {'student': student})
+    return render(
+        request,
+        'students/student_confirm_delete.html',
+        {'student': student},
+    )

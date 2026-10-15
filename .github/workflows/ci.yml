@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    env:
+      # Production-shaped settings so `check --deploy` is meaningful. The key
+      # below is a throw-away CI value, never a real one.
+      DJANGO_ENV: production
+      DJANGO_SECRET_KEY: ci-only-not-a-real-secret-key-0123456789-abcdef-ghijklmnopqrstuvwxyz
+      DJANGO_ALLOWED_HOSTS: example.com
+      DJANGO_CSRF_TRUSTED_ORIGINS: https://example.com
+      DJANGO_EMAIL_HOST: smtp.example.com
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Check for missing migrations
+        run: python manage.py makemigrations --check --dry-run
+
+      - name: System checks (development settings)
+        run: python manage.py check
+
+      - name: Deployment checks (production settings)
+        run: python manage.py check --deploy
+
+      - name: Tests (development settings)
+        run: python manage.py test students
+
+      - name: Tests (production settings)
+        run: python manage.py test students
